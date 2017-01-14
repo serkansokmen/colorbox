@@ -8,82 +8,197 @@
 
 import SpriteKit
 import GameplayKit
+import ChameleonFramework
 
-class GameScene: SKScene {
+
+struct GameViewModel {
     
-    private var label : SKLabelNode?
-    private var spinnyNode : SKShapeNode?
+    static let colors: [SKColor] = [.flatLime, .flatPowderBlue, .clear, .flatPink, .flatSand]
+    
+    var color: UIColor
+    var speed: TimeInterval
+    var win: Int
+    var loose: Int
+    
+    var nextColor: UIColor? {
+        if let index = GameViewModel.colors.index(of: color) {
+            let nextIndex = (index + 1) % GameViewModel.colors.count
+            return GameViewModel.colors[nextIndex]
+        }
+        return nil
+    }
+    var prevColor: UIColor? {
+        if let index = GameViewModel.colors.index(of: color) {
+            let prevIndex = index == 0 ? GameViewModel.colors.count - 1 : index - 1
+            return GameViewModel.colors[prevIndex]
+        }
+        return nil
+    }
+    
+    var randomColor: UIColor {
+        let randIndex = Int(arc4random_uniform(UInt32(GameViewModel.colors.count)))
+        return GameViewModel.colors[randIndex]
+    }
+    
+    var cellSize: CGFloat {
+        return 50.0
+    }
+    var cellPadding: CGFloat {
+        return 8.0
+    }
+}
+
+
+
+
+
+class GameScene: SKScene, SKPhysicsContactDelegate {
+    
+    var gameVm: GameViewModel!
+    
+    private var timer: Timer!
+    
+    var bucket: SKShapeNode!
+    var currentBait: SKShapeNode?
     
     override func didMove(to view: SKView) {
         
-        // Get label node from scene and store it for use later
-        self.label = self.childNode(withName: "//helloLabel") as? SKLabelNode
-        if let label = self.label {
-            label.alpha = 0.0
-            label.run(SKAction.fadeIn(withDuration: 2.0))
-        }
+        bucket = SKShapeNode.init(rectOf: CGSize.init(width: gameVm.cellSize,
+                                                      height: gameVm.cellSize),
+                                  cornerRadius: 5.0)
         
-        // Create shape node to use during mouse interaction
-        let w = (self.size.width + self.size.height) * 0.05
-        self.spinnyNode = SKShapeNode.init(rectOf: CGSize.init(width: w, height: w), cornerRadius: w * 0.3)
+        let sprite = SKSpriteNode(imageNamed: "bucket")
+        bucket.addChild(sprite)
+        sprite.position.x = -sprite.frame.width / CGFloat(2.0)
         
-        if let spinnyNode = self.spinnyNode {
-            spinnyNode.lineWidth = 2.5
-            
-            spinnyNode.run(SKAction.repeatForever(SKAction.rotate(byAngle: CGFloat(M_PI), duration: 1)))
-            spinnyNode.run(SKAction.sequence([SKAction.wait(forDuration: 0.5),
-                                              SKAction.fadeOut(withDuration: 0.5),
-                                              SKAction.removeFromParent()]))
-        }
+        bucket.position = CGPoint(x: self.frame.width / 2, y: 100)
+        bucket.fillColor = .clear
+        bucket.strokeColor = gameVm.color
+        bucket.lineWidth = 4.0
+        
+        addChild(bucket!)
     }
     
+    override func willMove(from view: SKView) {
+        super.willMove(from: view)
+    }
     
     func touchDown(atPoint pos : CGPoint) {
-        if let n = self.spinnyNode?.copy() as! SKShapeNode? {
-            n.position = pos
-            n.strokeColor = SKColor.green
-            self.addChild(n)
+        
+        var colorTo: UIColor?
+        
+        if pos.x < bucket.position.x {
+            // Bucket color
+            if let prev = gameVm.prevColor {
+                colorTo = prev
+            }
         }
+        
+        if pos.x > bucket.position.x {
+            // Bucket color
+            if let next = gameVm.nextColor {
+                colorTo = next
+            }
+        }
+        
+        guard let color = colorTo else { return }
+        
+        gameVm.color = color
+        let action = SKAction.customAction(withDuration: 0.2, actionBlock: { node, value in
+            (node as! SKShapeNode).strokeColor = color
+        })
+        bucket.run(action)
+        
+        let index = GameViewModel.colors.index(of: color)!
+        let sprite = bucket.children.first as! SKSpriteNode
+        let sprAction = SKAction.moveTo(x: CGFloat(index - 2) * (gameVm.cellSize + gameVm.cellPadding),
+                                        duration: 0.2)
+        sprite.run(sprAction)
     }
     
     func touchMoved(toPoint pos : CGPoint) {
-        if let n = self.spinnyNode?.copy() as! SKShapeNode? {
-            n.position = pos
-            n.strokeColor = SKColor.blue
-            self.addChild(n)
-        }
+        
     }
     
     func touchUp(atPoint pos : CGPoint) {
-        if let n = self.spinnyNode?.copy() as! SKShapeNode? {
-            n.position = pos
-            n.strokeColor = SKColor.red
-            self.addChild(n)
-        }
+        
     }
     
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if let label = self.label {
-            label.run(SKAction.init(named: "Pulse")!, withKey: "fadeInOut")
-        }
-        
         for t in touches { self.touchDown(atPoint: t.location(in: self)) }
     }
     
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for t in touches { self.touchMoved(toPoint: t.location(in: self)) }
     }
     
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for t in touches { self.touchUp(atPoint: t.location(in: self)) }
     }
     
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for t in touches { self.touchUp(atPoint: t.location(in: self)) }
     }
     
     
     override func update(_ currentTime: TimeInterval) {
-        // Called before each frame is rendered
+        super.update(currentTime)
+        
+        if let bait = currentBait {
+            
+            if bait.position.y <= bucket.position.y && bucket.strokeColor == bait.fillColor {
+                // Correct
+                gameVm.win += 1
+                
+                bait.removeAllActions()
+                
+                let fade = SKAction.fadeAlpha(to: 0, duration: gameVm.speed / 2)
+                let moveBy = SKAction.moveBy(x: 0, y: gameVm.cellSize, duration: gameVm.speed / 2)
+                moveBy.timingMode = .easeOut
+                
+                bait.run(SKAction.group([fade, moveBy])) {
+                    bait.removeFromParent()
+                    
+                    let toCorrect = SKAction.colorize(with: .flatSand, colorBlendFactor: 1, duration: 0.05)
+                    let reset = SKAction.colorize(with: .flatBlack, colorBlendFactor: 1, duration: 0.1)
+                    self.run(SKAction.sequence([toCorrect, reset]))
+                }
+            }
+        }
+    }
+    
+    func throwBait() {
+        
+        // Create shape node to use during mouse interaction
+        let w: CGFloat = gameVm.cellSize
+        let x = Double(self.frame.width / 2)
+        let y = Double(self.frame.height - w)
+        
+        let bait = SKShapeNode.init(rectOf: CGSize.init(width: w, height: w), cornerRadius: w * 0.3)
+        
+        bait.position = CGPoint(x: x, y: y)
+        bait.lineWidth = 0.0
+        bait.fillColor = gameVm.randomColor
+        bait.name = "bait"
+        
+        self.addChild(bait)
+        
+        currentBait = bait
+        
+        let move = SKAction.moveTo(y: 0, duration: gameVm.speed)
+        move.timingMode = SKActionTimingMode.easeIn
+        
+        bait.run(move) {
+            bait.removeFromParent()
+            
+            let toRed = SKAction.colorize(with: .flatRed, colorBlendFactor: 1, duration: 0.05)
+            let reset = SKAction.colorize(with: .flatBlack, colorBlendFactor: 1, duration: 0.1)
+            self.run(SKAction.sequence([toRed, reset]))
+        }
+        
+        //            spinnyNode.run(SKAction.repeatForever(SKAction.rotate(byAngle: CGFloat(M_PI), duration: 1)))
+        //            spinnyNode.run(SKAction.sequence([SKAction.wait(forDuration: 0.5),
+        //                                              SKAction.fadeOut(withDuration: 0.5),
+        //                                              SKAction.removeFromParent()]))
+        
+        
+        
     }
 }
